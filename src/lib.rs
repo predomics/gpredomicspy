@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use flexi_logger::{Logger, WriteMode};
+
 use gpredomics::param::Param as GParam;
 use gpredomics::individual::Individual as GIndividual;
 use gpredomics::population::Population as GPopulation;
@@ -376,6 +378,24 @@ fn fit(param: &Param) -> PyResult<Experiment> {
     Ok(Experiment { inner })
 }
 
+/// Initialize the Rust logger so gpredomics progress output is visible.
+///
+/// Must be called once before fit(). Subsequent calls are silently ignored.
+/// Output goes to stderr, which can be captured by the calling process.
+///
+/// Args:
+///     level: Log level string (default: "info"). Options: "error", "warn", "info", "debug", "trace".
+#[pyfunction]
+#[pyo3(signature = (level="info"))]
+fn init_logger(level: &str) -> PyResult<()> {
+    // flexi_logger returns Err if already initialized — silently ignore that.
+    let _ = Logger::try_with_str(level)
+        .map_err(|e| PyValueError::new_err(format!("Logger config error: {}", e)))?
+        .write_mode(WriteMode::Direct)
+        .start();
+    Ok(())
+}
+
 /// Python module for gpredomicspy
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -384,5 +404,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Population>()?;
     m.add_class::<Experiment>()?;
     m.add_function(wrap_pyfunction!(fit, m)?)?;
+    m.add_function(wrap_pyfunction!(init_logger, m)?)?;
     Ok(())
 }

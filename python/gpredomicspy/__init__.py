@@ -29,6 +29,7 @@ from gpredomicspy._core import (
     Population,
     Experiment,
     fit,
+    init_logger,
 )
 
 __version__ = "0.1.0"
@@ -38,4 +39,5 @@ __all__ = [
     "Population",
     "Experiment",
     "fit",
+    "init_logger",
 ]
