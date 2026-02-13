@@ -1,0 +1,24 @@
+[package]
+name = "gpredomicspy"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+description = "Python bindings for the gpredomics Rust engine"
+
+[lib]
+name = "gpredomicspy"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+gpredomics = { git = "https://github.com/predomics/gpredomics.git", tag = "v0.7.7" }
+rayon = "1.7"
+rand_chacha = "0.3"
+log = "0.4"
+flexi_logger = "0.27"
+chrono = "0.4"
+serde_yaml = "0.9"
+
+# Pin transitive dependencies to versions compatible with Rust <1.85
+rmp = ">=0.8.12, <0.8.15"
+rmp-serde = ">=1.1, <1.3.1"
