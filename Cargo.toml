@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module"] }
-gpredomics = { git = "https://github.com/predomics/gpredomics.git", tag = "v0.7.7" }
+gpredomics = { git = "https://github.com/predomics/gpredomics.git", tag = "v0.7.8" }
 rayon = "1.7"
 rand_chacha = "0.3"
 log = "0.4"
