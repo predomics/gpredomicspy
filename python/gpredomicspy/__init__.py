@@ -29,6 +29,7 @@ from gpredomicspy._core import (
     Population,
     Experiment,
     fit,
+    filter_features,
     init_logger,
 )
 
@@ -39,5 +40,6 @@ __all__ = [
     "Population",
     "Experiment",
     "fit",
+    "filter_features",
     "init_logger",
 ]

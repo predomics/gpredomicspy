@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use pyo3::exceptions::PyValueError;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicBool;
 use flexi_logger::{Logger, WriteMode};
 
 use gpredomics::param::Param as GParam;
+use gpredomics::data::Data as GData;
 use gpredomics::individual::Individual as GIndividual;
 use gpredomics::population::Population as GPopulation;
 use gpredomics::experiment::Experiment as GExperiment;
@@ -345,6 +346,14 @@ impl Experiment {
         self.inner.train_data.samples.clone()
     }
 
+    /// Get the full experiment results display including population, importance, and voting/jury.
+    ///
+    /// Returns:
+    ///     String with the formatted experiment results (same output as the CLI).
+    fn display_results(&self) -> String {
+        self.inner.display_results()
+    }
+
     fn __repr__(&self) -> String {
         let gens = if !self.inner.collections.is_empty() {
             self.inner.collections[0].len()
@@ -396,6 +405,149 @@ fn init_logger(level: &str) -> PyResult<()> {
     Ok(())
 }
 
+/// Run feature filtering/evaluation without a full optimization run.
+///
+/// Loads data from file paths specified in the Param object, runs the Rust
+/// feature evaluation pipeline (wilcoxon/ttest/bayesian_fisher + FDR correction),
+/// and computes per-feature statistics (prevalence, mean, std per class).
+///
+/// Args:
+///     param: Param object with data file paths and filtering configuration set.
+///
+/// Returns:
+///     dict with keys: n_features, n_samples, n_classes, class_labels, class_counts,
+///     feature_names, features (list of per-feature stat dicts), selected_count, method.
+#[pyfunction]
+fn filter_features<'py>(py: Python<'py>, param: &Param) -> PyResult<Bound<'py, PyDict>> {
+    // Load data
+    let mut data = GData::new();
+    data.load_data(
+        &param.inner.data.X,
+        &param.inner.data.y,
+        param.inner.data.features_in_rows,
+    ).map_err(|e| PyValueError::new_err(format!("Failed to load data: {}", e)))?;
+
+    // Run feature evaluation (includes statistical testing + FDR correction)
+    let (class_0_features, class_1_features) = data.evaluate_features(&param.inner);
+
+    // Build lookup: feature_index -> (class, significance)
+    let mut eval_map: HashMap<usize, (u8, f64)> = HashMap::new();
+    for &(idx, class, sig) in class_0_features.iter().chain(class_1_features.iter()) {
+        eval_map.insert(idx, (class, sig));
+    }
+    let selected_count = eval_map.len();
+
+    // Compute per-feature stats from sparse X matrix
+    let features_list = PyList::empty_bound(py);
+    for j in 0..data.feature_len {
+        let feat_dict = PyDict::new_bound(py);
+        feat_dict.set_item("index", j)?;
+        feat_dict.set_item("name", &data.features[j])?;
+
+        // Separate values by class and compute stats
+        let mut sum_0: f64 = 0.0;
+        let mut sum_1: f64 = 0.0;
+        let mut sum_sq_0: f64 = 0.0;
+        let mut sum_sq_1: f64 = 0.0;
+        let mut count_nz_0: usize = 0;
+        let mut count_nz_1: usize = 0;
+        let mut n_0: usize = 0;
+        let mut n_1: usize = 0;
+
+        for i in 0..data.sample_len {
+            let val = data.X.get(&(i, j)).copied().unwrap_or(0.0);
+            if data.y[i] == 0 {
+                n_0 += 1;
+                sum_0 += val;
+                sum_sq_0 += val * val;
+                if val != 0.0 { count_nz_0 += 1; }
+            } else {
+                n_1 += 1;
+                sum_1 += val;
+                sum_sq_1 += val * val;
+                if val != 0.0 { count_nz_1 += 1; }
+            }
+        }
+
+        let mean_0 = if n_0 > 0 { sum_0 / n_0 as f64 } else { 0.0 };
+        let mean_1 = if n_1 > 0 { sum_1 / n_1 as f64 } else { 0.0 };
+        let std_0 = if n_0 > 1 {
+            ((sum_sq_0 / n_0 as f64) - mean_0 * mean_0).max(0.0).sqrt()
+        } else { 0.0 };
+        let std_1 = if n_1 > 1 {
+            ((sum_sq_1 / n_1 as f64) - mean_1 * mean_1).max(0.0).sqrt()
+        } else { 0.0 };
+        let prev_0 = if n_0 > 0 { count_nz_0 as f64 / n_0 as f64 * 100.0 } else { 0.0 };
+        let prev_1 = if n_1 > 0 { count_nz_1 as f64 / n_1 as f64 * 100.0 } else { 0.0 };
+
+        // Overall stats
+        let n_total = n_0 + n_1;
+        let mean_all = if n_total > 0 { (sum_0 + sum_1) / n_total as f64 } else { 0.0 };
+        let sum_sq_all = sum_sq_0 + sum_sq_1;
+        let std_all = if n_total > 1 {
+            ((sum_sq_all / n_total as f64) - mean_all * mean_all).max(0.0).sqrt()
+        } else { 0.0 };
+        let prev_all = if n_total > 0 {
+            (count_nz_0 + count_nz_1) as f64 / n_total as f64 * 100.0
+        } else { 0.0 };
+
+        feat_dict.set_item("mean", mean_all)?;
+        feat_dict.set_item("std", std_all)?;
+        feat_dict.set_item("prevalence", prev_all)?;
+        feat_dict.set_item("mean_0", mean_0)?;
+        feat_dict.set_item("mean_1", mean_1)?;
+        feat_dict.set_item("std_0", std_0)?;
+        feat_dict.set_item("std_1", std_1)?;
+        feat_dict.set_item("prevalence_0", prev_0)?;
+        feat_dict.set_item("prevalence_1", prev_1)?;
+
+        // Evaluation results (class assignment + significance)
+        if let Some(&(class, sig)) = eval_map.get(&j) {
+            feat_dict.set_item("selected", true)?;
+            feat_dict.set_item("class", class)?;
+            feat_dict.set_item("significance", sig)?;
+        } else {
+            feat_dict.set_item("selected", false)?;
+            feat_dict.set_item("class", 2u8)?;  // not significant
+            feat_dict.set_item("significance", py.None())?;
+        }
+
+        features_list.append(feat_dict)?;
+    }
+
+    // Build class counts
+    let class_counts = PyDict::new_bound(py);
+    let mut c0: usize = 0;
+    let mut c1: usize = 0;
+    for &y_val in &data.y {
+        if y_val == 0 { c0 += 1; } else { c1 += 1; }
+    }
+    if data.classes.len() >= 2 {
+        class_counts.set_item(&data.classes[0], c0)?;
+        class_counts.set_item(&data.classes[1], c1)?;
+    } else {
+        class_counts.set_item("0", c0)?;
+        class_counts.set_item("1", c1)?;
+    }
+
+    // Method name
+    let method_name = format!("{:?}", param.inner.data.feature_selection_method);
+
+    // Build result
+    let result = PyDict::new_bound(py);
+    result.set_item("n_features", data.feature_len)?;
+    result.set_item("n_samples", data.sample_len)?;
+    result.set_item("n_classes", data.classes.len())?;
+    result.set_item("class_labels", &data.classes)?;
+    result.set_item("class_counts", class_counts)?;
+    result.set_item("feature_names", &data.features)?;
+    result.set_item("features", features_list)?;
+    result.set_item("selected_count", selected_count)?;
+    result.set_item("method", method_name)?;
+
+    Ok(result)
+}
+
 /// Python module for gpredomicspy
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -404,6 +556,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Population>()?;
     m.add_class::<Experiment>()?;
     m.add_function(wrap_pyfunction!(fit, m)?)?;
+    m.add_function(wrap_pyfunction!(filter_features, m)?)?;
     m.add_function(wrap_pyfunction!(init_logger, m)?)?;
     Ok(())
 }
