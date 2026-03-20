@@ -11,7 +11,7 @@ use gpredomics::param::Param as GParam;
 use gpredomics::data::Data as GData;
 use gpredomics::individual::Individual as GIndividual;
 use gpredomics::population::Population as GPopulation;
-use gpredomics::experiment::Experiment as GExperiment;
+use gpredomics::experiment::{Experiment as GExperiment, ExperimentMetadata};
 
 // ---------------------------------------------------------------------------
 // Helpers: convert u8 language/data_type codes to human-readable strings
@@ -143,6 +143,12 @@ impl Param {
             "log_level" => self.inner.general.log_level = value.to_string(),
             "feature_selection_method" => self.inner.data.feature_selection_method = serde_yaml::from_str(value)
                 .map_err(|e| PyValueError::new_err(format!("Invalid feature_selection_method: {}", e)))?,
+            "fbm_ci_method" => self.inner.voting.fbm_ci_method = serde_yaml::from_str(value)
+                .map_err(|e| PyValueError::new_err(format!("Invalid fbm_ci_method: {}", e)))?,
+            "cv_fbm_ci_method" => self.inner.cv.cv_fbm_ci_method = serde_yaml::from_str(value)
+                .map_err(|e| PyValueError::new_err(format!("Invalid cv_fbm_ci_method: {}", e)))?,
+            "voting_method" => self.inner.voting.method = serde_yaml::from_str(value)
+                .map_err(|e| PyValueError::new_err(format!("Invalid voting_method: {}", e)))?,
             _ => return Err(PyValueError::new_err(format!("Unknown string parameter: {}", name))),
         }
         Ok(())
@@ -215,6 +221,20 @@ impl Individual {
         self.inner.features.clone()
     }
 
+    /// Compute signed Jaccard dissimilarity with another Individual.
+    ///
+    /// Uses signed feature sets: (feature_index, coefficient_sign) pairs.
+    /// Distance = 1 - |intersection| / |union|.
+    ///
+    /// Args:
+    ///     other: Another Individual to compare against.
+    ///
+    /// Returns:
+    ///     float in [0, 1]. 0 = identical signed feature sets, 1 = completely different.
+    fn signed_jaccard_dissimilarity_with(&self, other: &Individual) -> f64 {
+        self.inner.signed_jaccard_dissimilarity_with(&other.inner)
+    }
+
     fn __repr__(&self) -> String {
         format!("Individual(k={}, auc={:.4}, fit={:.4}, lang={}, dtype={})",
             self.inner.k, self.inner.auc, self.inner.fit,
@@ -259,6 +279,28 @@ impl Population {
     /// Get the best individual (first in sorted population).
     fn best(&self) -> PyResult<Individual> {
         self.get_individual(0)
+    }
+
+    /// Compute pairwise signed Jaccard dissimilarity for all individuals.
+    ///
+    /// Returns the upper triangle of the distance matrix as a flat list
+    /// (condensed form, compatible with scipy.spatial.distance.squareform).
+    /// Order: d(0,1), d(0,2), ..., d(0,n-1), d(1,2), ..., d(n-2,n-1).
+    ///
+    /// Returns:
+    ///     list of floats, length n*(n-1)/2.
+    fn pairwise_tanimoto_distances(&self) -> Vec<f64> {
+        let n = self.inner.individuals.len();
+        let mut condensed = Vec::with_capacity(n * (n - 1) / 2);
+        for i in 0..n {
+            for j in (i + 1)..n {
+                condensed.push(
+                    self.inner.individuals[i]
+                        .signed_jaccard_dissimilarity_with(&self.inner.individuals[j])
+                );
+            }
+        }
+        condensed
     }
 
     fn __repr__(&self) -> String {
@@ -352,6 +394,155 @@ impl Experiment {
     ///     String with the formatted experiment results (same output as the CLI).
     fn display_results(&self) -> String {
         self.inner.display_results()
+    }
+
+    /// Check if jury/voting data is available.
+    fn has_jury(&self) -> bool {
+        matches!(&self.inner.others, Some(ExperimentMetadata::Jury { .. }))
+    }
+
+    /// Get jury metrics as a dictionary.
+    ///
+    /// Returns:
+    ///     dict with keys: method, expert_count, auc, accuracy, sensitivity, specificity,
+    ///     rejection_rate, predicted_classes, weights.
+    fn get_jury_metrics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let jury = match &self.inner.others {
+            Some(ExperimentMetadata::Jury { jury }) => jury,
+            _ => return Err(PyValueError::new_err("No jury data available")),
+        };
+
+        let dict = PyDict::new_bound(py);
+        dict.set_item("method", format!("{:?}", jury.voting_method))?;
+        dict.set_item("expert_count", jury.experts.individuals.len())?;
+        dict.set_item("auc", jury.auc)?;
+        dict.set_item("accuracy", jury.accuracy)?;
+        dict.set_item("sensitivity", jury.sensitivity)?;
+        dict.set_item("specificity", jury.specificity)?;
+        dict.set_item("rejection_rate", jury.rejection_rate)?;
+
+        if let Some(ref preds) = jury.predicted_classes {
+            let py_preds: Vec<u8> = preds.clone();
+            dict.set_item("predicted_classes", py_preds)?;
+        }
+        if let Some(ref weights) = jury.weights {
+            dict.set_item("weights", weights.clone())?;
+        }
+
+        Ok(dict)
+    }
+
+    /// Get the jury expert population.
+    fn get_jury_experts(&self) -> PyResult<Population> {
+        let jury = match &self.inner.others {
+            Some(ExperimentMetadata::Jury { jury }) => jury,
+            _ => return Err(PyValueError::new_err("No jury data available")),
+        };
+        Ok(Population { inner: jury.experts.clone() })
+    }
+
+    /// Get the per-expert per-sample vote matrix for the training data.
+    ///
+    /// Returns:
+    ///     dict with keys:
+    ///       - sample_names: list of sample names
+    ///       - real_classes: list of true class labels (0/1) for each sample
+    ///       - votes: list of lists, where votes[i][j] is expert j's prediction for sample i (0, 1, or 2=abstain)
+    ///       - n_experts: number of experts
+    ///       - expert_aucs: list of each expert's AUC
+    fn get_vote_matrix<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let jury = match &self.inner.others {
+            Some(ExperimentMetadata::Jury { jury }) => jury,
+            _ => return Err(PyValueError::new_err("No jury data available")),
+        };
+
+        let data = &self.inner.train_data;
+
+        // Each expert evaluates each sample
+        let expert_predictions: Vec<Vec<u8>> = jury
+            .experts
+            .individuals
+            .iter()
+            .map(|expert| expert.evaluate_class(data))
+            .collect();
+
+        let n_experts = expert_predictions.len();
+        let n_samples = data.sample_len;
+
+        // Transpose: votes[sample][expert]
+        let mut votes: Vec<Vec<u8>> = Vec::with_capacity(n_samples);
+        for s in 0..n_samples {
+            let mut row = Vec::with_capacity(n_experts);
+            for expert_pred in &expert_predictions {
+                if s < expert_pred.len() {
+                    row.push(expert_pred[s]);
+                } else {
+                    row.push(2); // abstain
+                }
+            }
+            votes.push(row);
+        }
+
+        let expert_aucs: Vec<f64> = jury.experts.individuals.iter().map(|e| e.auc).collect();
+
+        let dict = PyDict::new_bound(py);
+        dict.set_item("sample_names", data.samples.clone())?;
+        dict.set_item("real_classes", data.y.clone())?;
+        dict.set_item("votes", votes)?;
+        dict.set_item("n_experts", n_experts)?;
+        dict.set_item("expert_aucs", expert_aucs)?;
+
+        Ok(dict)
+    }
+
+    /// Get the per-expert per-sample vote matrix for the test data (if available).
+    ///
+    /// Returns:
+    ///     dict with same structure as get_vote_matrix(), or raises error if no test data.
+    fn get_vote_matrix_test<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let jury = match &self.inner.others {
+            Some(ExperimentMetadata::Jury { jury }) => jury,
+            _ => return Err(PyValueError::new_err("No jury data available")),
+        };
+
+        let test_data = match &self.inner.test_data {
+            Some(data) => data,
+            None => return Err(PyValueError::new_err("No test data available")),
+        };
+
+        let expert_predictions: Vec<Vec<u8>> = jury
+            .experts
+            .individuals
+            .iter()
+            .map(|expert| expert.evaluate_class(test_data))
+            .collect();
+
+        let n_experts = expert_predictions.len();
+        let n_samples = test_data.sample_len;
+
+        let mut votes: Vec<Vec<u8>> = Vec::with_capacity(n_samples);
+        for s in 0..n_samples {
+            let mut row = Vec::with_capacity(n_experts);
+            for expert_pred in &expert_predictions {
+                if s < expert_pred.len() {
+                    row.push(expert_pred[s]);
+                } else {
+                    row.push(2);
+                }
+            }
+            votes.push(row);
+        }
+
+        let expert_aucs: Vec<f64> = jury.experts.individuals.iter().map(|e| e.auc).collect();
+
+        let dict = PyDict::new_bound(py);
+        dict.set_item("sample_names", test_data.samples.clone())?;
+        dict.set_item("real_classes", test_data.y.clone())?;
+        dict.set_item("votes", votes)?;
+        dict.set_item("n_experts", n_experts)?;
+        dict.set_item("expert_aucs", expert_aucs)?;
+
+        Ok(dict)
     }
 
     fn __repr__(&self) -> String {

@@ -11,7 +11,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module"] }
-gpredomics = { git = "https://github.com/predomics/gpredomics.git", tag = "v0.7.8" }
+# Toggle between release and local development:
+# Release (default):
+# gpredomics = { git = "https://github.com/predomics/gpredomics.git", tag = "v0.8.2" }
+# Local development (uncomment to use local changes):
+gpredomics = { path = "../gpredomics" }
 rayon = "1.7"
 rand_chacha = "0.3"
 log = "0.4"
