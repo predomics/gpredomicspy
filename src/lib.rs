@@ -396,6 +396,115 @@ impl Experiment {
         self.inner.display_results()
     }
 
+    /// Get the true class labels (y) for the training data.
+    fn train_labels(&self) -> Vec<u8> {
+        self.inner.train_data.y.clone()
+    }
+
+    /// Get the true class labels (y) for the test data (if available).
+    fn test_labels(&self) -> PyResult<Vec<u8>> {
+        match &self.inner.test_data {
+            Some(td) => Ok(td.y.clone()),
+            None => Err(PyValueError::new_err("No test data available")),
+        }
+    }
+
+    /// Get raw prediction scores for training samples using a specific model from the best population.
+    ///
+    /// Args:
+    ///     model_index: Index into the best population (default 0 = best model).
+    ///
+    /// Returns:
+    ///     list of floats — one score per training sample.
+    #[pyo3(signature = (model_index=0))]
+    fn predict_scores_train(&self, model_index: usize) -> PyResult<Vec<f64>> {
+        let pop = match &self.inner.final_population {
+            Some(p) => p,
+            None => return Err(PyValueError::new_err("No final population available")),
+        };
+        if model_index >= pop.individuals.len() {
+            return Err(PyValueError::new_err(format!(
+                "Model index {} out of range (population size: {})",
+                model_index, pop.individuals.len()
+            )));
+        }
+        Ok(pop.individuals[model_index].evaluate(&self.inner.train_data))
+    }
+
+    /// Get raw prediction scores for test samples using a specific model from the best population.
+    ///
+    /// Args:
+    ///     model_index: Index into the best population (default 0 = best model).
+    ///
+    /// Returns:
+    ///     list of floats — one score per test sample.
+    #[pyo3(signature = (model_index=0))]
+    fn predict_scores_test(&self, model_index: usize) -> PyResult<Vec<f64>> {
+        let td = match &self.inner.test_data {
+            Some(d) => d,
+            None => return Err(PyValueError::new_err("No test data available")),
+        };
+        let pop = match &self.inner.final_population {
+            Some(p) => p,
+            None => return Err(PyValueError::new_err("No final population available")),
+        };
+        if model_index >= pop.individuals.len() {
+            return Err(PyValueError::new_err(format!(
+                "Model index {} out of range (population size: {})",
+                model_index, pop.individuals.len()
+            )));
+        }
+        Ok(pop.individuals[model_index].evaluate(td))
+    }
+
+    /// Get predicted classes for training samples using a specific model.
+    ///
+    /// Args:
+    ///     model_index: Index into the best population (default 0 = best model).
+    ///
+    /// Returns:
+    ///     list of ints (0, 1, or 2=rejected) — one per training sample.
+    #[pyo3(signature = (model_index=0))]
+    fn predict_classes_train(&self, model_index: usize) -> PyResult<Vec<u8>> {
+        let pop = match &self.inner.final_population {
+            Some(p) => p,
+            None => return Err(PyValueError::new_err("No final population available")),
+        };
+        if model_index >= pop.individuals.len() {
+            return Err(PyValueError::new_err(format!(
+                "Model index {} out of range (population size: {})",
+                model_index, pop.individuals.len()
+            )));
+        }
+        Ok(pop.individuals[model_index].evaluate_class(&self.inner.train_data))
+    }
+
+    /// Get predicted classes for test samples using a specific model.
+    ///
+    /// Args:
+    ///     model_index: Index into the best population (default 0 = best model).
+    ///
+    /// Returns:
+    ///     list of ints (0, 1, or 2=rejected) — one per test sample.
+    #[pyo3(signature = (model_index=0))]
+    fn predict_classes_test(&self, model_index: usize) -> PyResult<Vec<u8>> {
+        let td = match &self.inner.test_data {
+            Some(d) => d,
+            None => return Err(PyValueError::new_err("No test data available")),
+        };
+        let pop = match &self.inner.final_population {
+            Some(p) => p,
+            None => return Err(PyValueError::new_err("No final population available")),
+        };
+        if model_index >= pop.individuals.len() {
+            return Err(PyValueError::new_err(format!(
+                "Model index {} out of range (population size: {})",
+                model_index, pop.individuals.len()
+            )));
+        }
+        Ok(pop.individuals[model_index].evaluate_class(td))
+    }
+
     /// Check if jury/voting data is available.
     fn has_jury(&self) -> bool {
         matches!(&self.inner.others, Some(ExperimentMetadata::Jury { .. }))

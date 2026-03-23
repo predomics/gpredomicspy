@@ -33,6 +33,8 @@ from gpredomicspy._core import (
     init_logger,
 )
 
+from gpredomicspy import clinical
+
 __version__ = "0.1.0"
 __all__ = [
     "Param",
@@ -42,4 +44,5 @@ __all__ = [
     "fit",
     "filter_features",
     "init_logger",
+    "clinical",
 ]
