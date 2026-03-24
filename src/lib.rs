@@ -540,6 +540,40 @@ impl Experiment {
         Ok(result)
     }
 
+    /// Get the ACO pheromone timeline (per-iteration snapshots).
+    ///
+    /// Returns:
+    ///     list of dicts with keys: iteration, entropy, top_features (list of [feature_idx, tau_pos, tau_neg])
+    fn get_pheromone_timeline<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let timeline = match &self.inner.aco_pheromone_timeline {
+            Some(t) => t,
+            None => return Err(PyValueError::new_err("No ACO pheromone timeline available")),
+        };
+        let feature_names = &self.inner.train_data.features;
+
+        let mut result = Vec::with_capacity(timeline.len());
+        for snap in timeline {
+            let dict = PyDict::new_bound(py);
+            dict.set_item("iteration", snap.iteration)?;
+            dict.set_item("entropy", snap.entropy)?;
+            let features: Vec<(String, f64, f64)> = snap
+                .top_features
+                .iter()
+                .map(|&(idx, tp, tn)| {
+                    let name = if idx < feature_names.len() {
+                        feature_names[idx].clone()
+                    } else {
+                        format!("feature_{}", idx)
+                    };
+                    (name, tp, tn)
+                })
+                .collect();
+            dict.set_item("top_features", features)?;
+            result.push(dict);
+        }
+        Ok(result)
+    }
+
     /// Check if jury/voting data is available.
     fn has_jury(&self) -> bool {
         matches!(&self.inner.others, Some(ExperimentMetadata::Jury { .. }))
