@@ -505,6 +505,41 @@ impl Experiment {
         Ok(pop.individuals[model_index].evaluate_class(td))
     }
 
+    /// Check if ACO pheromone data is available.
+    fn has_pheromone(&self) -> bool {
+        self.inner.aco_pheromone.is_some()
+    }
+
+    /// Get the ACO pheromone matrix as a list of dicts.
+    ///
+    /// Returns:
+    ///     list of dicts with keys: feature_idx, feature_name, tau_positive, tau_negative, tau_total
+    ///     Sorted by tau_total descending.
+    fn get_pheromone<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let pheromone = match &self.inner.aco_pheromone {
+            Some(p) => p,
+            None => return Err(PyValueError::new_err("No ACO pheromone data available")),
+        };
+        let feature_names = &self.inner.train_data.features;
+
+        let mut result = Vec::with_capacity(pheromone.len());
+        for entry in pheromone {
+            let dict = PyDict::new_bound(py);
+            dict.set_item("feature_idx", entry.feature_idx)?;
+            let name = if entry.feature_idx < feature_names.len() {
+                feature_names[entry.feature_idx].clone()
+            } else {
+                format!("feature_{}", entry.feature_idx)
+            };
+            dict.set_item("feature_name", name)?;
+            dict.set_item("tau_positive", entry.tau_positive)?;
+            dict.set_item("tau_negative", entry.tau_negative)?;
+            dict.set_item("tau_total", entry.tau_total)?;
+            result.push(dict);
+        }
+        Ok(result)
+    }
+
     /// Check if jury/voting data is available.
     fn has_jury(&self) -> bool {
         matches!(&self.inner.others, Some(ExperimentMetadata::Jury { .. }))
