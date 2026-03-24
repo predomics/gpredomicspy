@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::exceptions::PyValueError;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -200,12 +200,12 @@ impl Individual {
     ///     threshold, k (number of features), language, data_type, epoch.
     fn get_metrics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new_bound(py);
-        dict.set_item("auc", self.inner.auc)?;
+        dict.set_item("auc", self.inner.cls.auc)?;
         dict.set_item("fit", self.inner.fit)?;
-        dict.set_item("accuracy", self.inner.accuracy)?;
-        dict.set_item("sensitivity", self.inner.sensitivity)?;
-        dict.set_item("specificity", self.inner.specificity)?;
-        dict.set_item("threshold", self.inner.threshold)?;
+        dict.set_item("accuracy", self.inner.cls.accuracy)?;
+        dict.set_item("sensitivity", self.inner.cls.sensitivity)?;
+        dict.set_item("specificity", self.inner.cls.specificity)?;
+        dict.set_item("threshold", self.inner.cls.threshold)?;
         dict.set_item("k", self.inner.k)?;
         dict.set_item("language", language_name(self.inner.language))?;
         dict.set_item("data_type", data_type_name(self.inner.data_type))?;
@@ -217,7 +217,7 @@ impl Individual {
     ///
     /// Returns:
     ///     dict mapping feature index (int) to coefficient sign (int: -1, 0, or 1).
-    fn get_features(&self) -> HashMap<usize, i8> {
+    fn get_features(&self) -> BTreeMap<usize, i8> {
         self.inner.features.clone()
     }
 
@@ -237,7 +237,7 @@ impl Individual {
 
     fn __repr__(&self) -> String {
         format!("Individual(k={}, auc={:.4}, fit={:.4}, lang={}, dtype={})",
-            self.inner.k, self.inner.auc, self.inner.fit,
+            self.inner.k, self.inner.cls.auc, self.inner.fit,
             language_name(self.inner.language), data_type_name(self.inner.data_type))
     }
 }
@@ -661,7 +661,7 @@ impl Experiment {
             votes.push(row);
         }
 
-        let expert_aucs: Vec<f64> = jury.experts.individuals.iter().map(|e| e.auc).collect();
+        let expert_aucs: Vec<f64> = jury.experts.individuals.iter().map(|e| e.cls.auc).collect();
 
         let dict = PyDict::new_bound(py);
         dict.set_item("sample_names", data.samples.clone())?;
@@ -711,7 +711,7 @@ impl Experiment {
             votes.push(row);
         }
 
-        let expert_aucs: Vec<f64> = jury.experts.individuals.iter().map(|e| e.auc).collect();
+        let expert_aucs: Vec<f64> = jury.experts.individuals.iter().map(|e| e.cls.auc).collect();
 
         let dict = PyDict::new_bound(py);
         dict.set_item("sample_names", test_data.samples.clone())?;
