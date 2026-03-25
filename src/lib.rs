@@ -1,17 +1,17 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use pyo3::exceptions::PyValueError;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use flexi_logger::{Logger, WriteMode};
 
-use gpredomics::param::Param as GParam;
 use gpredomics::data::Data as GData;
-use gpredomics::individual::Individual as GIndividual;
-use gpredomics::population::Population as GPopulation;
 use gpredomics::experiment::{Experiment as GExperiment, ExperimentMetadata};
+use gpredomics::individual::Individual as GIndividual;
+use gpredomics::param::Param as GParam;
+use gpredomics::population::Population as GPopulation;
 
 // ---------------------------------------------------------------------------
 // Helpers: convert u8 language/data_type codes to human-readable strings
@@ -112,7 +112,49 @@ impl Param {
             // MCMC
             "n_iter" => self.inner.mcmc.n_iter = value as usize,
             "n_burn" => self.inner.mcmc.n_burn = value as usize,
-            "lambda" => self.inner.mcmc.lambda = value,
+            "lambda" | "mcmc_lambda" => self.inner.mcmc.lambda = value,
+            "nmin" => self.inner.mcmc.nmin = value as u32,
+            "p0" | "mcmc_p0" => self.inner.mcmc.p0 = value,
+            "n_chains" => self.inner.mcmc.n_chains = value as usize,
+
+            // ACO
+            "n_ants" => self.inner.aco.n_ants = value as usize,
+            "aco_max_iterations" => self.inner.aco.max_iterations = value as usize,
+            "aco_min_iterations" => self.inner.aco.min_iterations = value as usize,
+            "alpha" => self.inner.aco.alpha = value,
+            "beta" => self.inner.aco.beta = value,
+            "rho" => self.inner.aco.rho = value,
+            "tau_min" => self.inner.aco.tau_min = value,
+            "tau_max" => self.inner.aco.tau_max = value,
+            "elite_weight" => self.inner.aco.elite_weight = value,
+            "aco_k_min" => self.inner.aco.k_min = value as usize,
+            "aco_k_max" => self.inner.aco.k_max = value as usize,
+
+            // SA
+            "initial_temperature" => self.inner.sa.initial_temperature = value,
+            "cooling_rate" => self.inner.sa.cooling_rate = value,
+            "min_temperature" => self.inner.sa.min_temperature = value,
+            "sa_max_iterations" => self.inner.sa.max_iterations = value as usize,
+            "sa_k_min" => self.inner.sa.k_min = value as usize,
+            "sa_k_max" => self.inner.sa.k_max = value as usize,
+
+            // ILS
+            "ils_max_iterations" => self.inner.ils.max_iterations = value as usize,
+            "perturbation_size" => self.inner.ils.perturbation_size = value as usize,
+            "local_search_steps" => self.inner.ils.local_search_steps = value as usize,
+            "max_no_improve" => self.inner.ils.max_no_improve = value as usize,
+            "ils_k_min" => self.inner.ils.k_min = value as usize,
+            "ils_k_max" => self.inner.ils.k_max = value as usize,
+
+            // LASSO
+            "alpha_min" => self.inner.lasso.alpha_min = value,
+            "alpha_max" => self.inner.lasso.alpha_max = value,
+            "n_alphas" => self.inner.lasso.n_alphas = value as usize,
+            "l1_ratio" => self.inner.lasso.l1_ratio = value,
+
+            // Beam
+            "k_start" | "beam_kmin" => self.inner.beam.k_start = value as usize,
+            "k_stop" | "beam_kmax" => self.inner.beam.k_stop = value as usize,
 
             // Importance
             "n_permutations_mda" => self.inner.importance.n_permutations_mda = value as usize,
@@ -123,7 +165,12 @@ impl Param {
             "fbm_ci_alpha" => self.inner.voting.fbm_ci_alpha = value,
             "method_threshold" => self.inner.voting.method_threshold = value,
 
-            _ => return Err(PyValueError::new_err(format!("Unknown numeric parameter: {}", name))),
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown numeric parameter: {}",
+                    name
+                )))
+            }
         }
         Ok(())
     }
@@ -138,18 +185,47 @@ impl Param {
             "algo" => self.inner.general.algo = value.to_string(),
             "language" => self.inner.general.language = value.to_string(),
             "data_type" => self.inner.general.data_type = value.to_string(),
-            "fit" => self.inner.general.fit = serde_yaml::from_str(value)
-                .map_err(|e| PyValueError::new_err(format!("Invalid fit function: {}", e)))?,
+            "fit" => {
+                self.inner.general.fit = serde_yaml::from_str(value)
+                    .map_err(|e| PyValueError::new_err(format!("Invalid fit function: {}", e)))?
+            }
             "log_level" => self.inner.general.log_level = value.to_string(),
-            "feature_selection_method" => self.inner.data.feature_selection_method = serde_yaml::from_str(value)
-                .map_err(|e| PyValueError::new_err(format!("Invalid feature_selection_method: {}", e)))?,
-            "fbm_ci_method" => self.inner.voting.fbm_ci_method = serde_yaml::from_str(value)
-                .map_err(|e| PyValueError::new_err(format!("Invalid fbm_ci_method: {}", e)))?,
-            "cv_fbm_ci_method" => self.inner.cv.cv_fbm_ci_method = serde_yaml::from_str(value)
-                .map_err(|e| PyValueError::new_err(format!("Invalid cv_fbm_ci_method: {}", e)))?,
-            "voting_method" => self.inner.voting.method = serde_yaml::from_str(value)
-                .map_err(|e| PyValueError::new_err(format!("Invalid voting_method: {}", e)))?,
-            _ => return Err(PyValueError::new_err(format!("Unknown string parameter: {}", name))),
+            "feature_selection_method" => {
+                self.inner.data.feature_selection_method =
+                    serde_yaml::from_str(value).map_err(|e| {
+                        PyValueError::new_err(format!("Invalid feature_selection_method: {}", e))
+                    })?
+            }
+            "fbm_ci_method" => {
+                self.inner.voting.fbm_ci_method = serde_yaml::from_str(value)
+                    .map_err(|e| PyValueError::new_err(format!("Invalid fbm_ci_method: {}", e)))?
+            }
+            "cv_fbm_ci_method" => {
+                self.inner.cv.cv_fbm_ci_method = serde_yaml::from_str(value).map_err(|e| {
+                    PyValueError::new_err(format!("Invalid cv_fbm_ci_method: {}", e))
+                })?
+            }
+            "voting_method" => {
+                self.inner.voting.method = serde_yaml::from_str(value)
+                    .map_err(|e| PyValueError::new_err(format!("Invalid voting_method: {}", e)))?
+            }
+            "mcmc_method" => self.inner.mcmc.method = value.to_string(),
+            "beam_method" => {
+                self.inner.beam.method = serde_yaml::from_str(value)
+                    .map_err(|e| PyValueError::new_err(format!("Invalid beam_method: {}", e)))?
+            }
+            "importance_aggregation" => {
+                self.inner.importance.importance_aggregation =
+                    serde_yaml::from_str(value).map_err(|e| {
+                        PyValueError::new_err(format!("Invalid importance_aggregation: {}", e))
+                    })?
+            }
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown string parameter: {}",
+                    name
+                )))
+            }
         }
         Ok(())
     }
@@ -165,16 +241,21 @@ impl Param {
             "vote" => self.inner.voting.vote = value,
             "compute_importance" => self.inner.importance.compute_importance = value,
             "scaled_importance" => self.inner.importance.scaled_importance = value,
-            _ => return Err(PyValueError::new_err(format!("Unknown boolean parameter: {}", name))),
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown boolean parameter: {}",
+                    name
+                )))
+            }
         }
         Ok(())
     }
 
     fn __repr__(&self) -> String {
-        format!("Param(algo={}, language={}, data_type={})",
-            self.inner.general.algo,
-            self.inner.general.language,
-            self.inner.general.data_type)
+        format!(
+            "Param(algo={}, language={}, data_type={})",
+            self.inner.general.algo, self.inner.general.language, self.inner.general.data_type
+        )
     }
 }
 
@@ -236,9 +317,14 @@ impl Individual {
     }
 
     fn __repr__(&self) -> String {
-        format!("Individual(k={}, auc={:.4}, fit={:.4}, lang={}, dtype={})",
-            self.inner.k, self.inner.cls.auc, self.inner.fit,
-            language_name(self.inner.language), data_type_name(self.inner.data_type))
+        format!(
+            "Individual(k={}, auc={:.4}, fit={:.4}, lang={}, dtype={})",
+            self.inner.k,
+            self.inner.cls.auc,
+            self.inner.fit,
+            language_name(self.inner.language),
+            data_type_name(self.inner.data_type)
+        )
     }
 }
 
@@ -268,7 +354,8 @@ impl Population {
         if index >= self.inner.individuals.len() {
             return Err(PyValueError::new_err(format!(
                 "Index {} out of range (population size: {})",
-                index, self.inner.individuals.len()
+                index,
+                self.inner.individuals.len()
             )));
         }
         Ok(Individual {
@@ -296,7 +383,7 @@ impl Population {
             for j in (i + 1)..n {
                 condensed.push(
                     self.inner.individuals[i]
-                        .signed_jaccard_dissimilarity_with(&self.inner.individuals[j])
+                        .signed_jaccard_dissimilarity_with(&self.inner.individuals[j]),
                 );
             }
         }
@@ -335,7 +422,8 @@ impl Experiment {
         if fold >= self.inner.collections.len() {
             return Err(PyValueError::new_err(format!(
                 "Fold {} out of range (total: {})",
-                fold, self.inner.collections.len()
+                fold,
+                self.inner.collections.len()
             )));
         }
         Ok(self.inner.collections[fold].len())
@@ -359,13 +447,15 @@ impl Experiment {
         if fold >= self.inner.collections.len() {
             return Err(PyValueError::new_err(format!(
                 "Fold {} out of range (total: {})",
-                fold, self.inner.collections.len()
+                fold,
+                self.inner.collections.len()
             )));
         }
         if generation >= self.inner.collections[fold].len() {
             return Err(PyValueError::new_err(format!(
                 "Generation {} out of range (total: {})",
-                generation, self.inner.collections[fold].len()
+                generation,
+                self.inner.collections[fold].len()
             )));
         }
         Ok(Population {
@@ -397,12 +487,12 @@ impl Experiment {
     }
 
     /// Get the true class labels (y) for the training data.
-    fn train_labels(&self) -> Vec<u8> {
+    fn train_labels(&self) -> Vec<f64> {
         self.inner.train_data.y.clone()
     }
 
     /// Get the true class labels (y) for the test data (if available).
-    fn test_labels(&self) -> PyResult<Vec<u8>> {
+    fn test_labels(&self) -> PyResult<Vec<f64>> {
         match &self.inner.test_data {
             Some(td) => Ok(td.y.clone()),
             None => Err(PyValueError::new_err("No test data available")),
@@ -425,7 +515,8 @@ impl Experiment {
         if model_index >= pop.individuals.len() {
             return Err(PyValueError::new_err(format!(
                 "Model index {} out of range (population size: {})",
-                model_index, pop.individuals.len()
+                model_index,
+                pop.individuals.len()
             )));
         }
         Ok(pop.individuals[model_index].evaluate(&self.inner.train_data))
@@ -451,7 +542,8 @@ impl Experiment {
         if model_index >= pop.individuals.len() {
             return Err(PyValueError::new_err(format!(
                 "Model index {} out of range (population size: {})",
-                model_index, pop.individuals.len()
+                model_index,
+                pop.individuals.len()
             )));
         }
         Ok(pop.individuals[model_index].evaluate(td))
@@ -473,7 +565,8 @@ impl Experiment {
         if model_index >= pop.individuals.len() {
             return Err(PyValueError::new_err(format!(
                 "Model index {} out of range (population size: {})",
-                model_index, pop.individuals.len()
+                model_index,
+                pop.individuals.len()
             )));
         }
         Ok(pop.individuals[model_index].evaluate_class(&self.inner.train_data))
@@ -499,7 +592,8 @@ impl Experiment {
         if model_index >= pop.individuals.len() {
             return Err(PyValueError::new_err(format!(
                 "Model index {} out of range (population size: {})",
-                model_index, pop.individuals.len()
+                model_index,
+                pop.individuals.len()
             )));
         }
         Ok(pop.individuals[model_index].evaluate_class(td))
@@ -616,7 +710,9 @@ impl Experiment {
             Some(ExperimentMetadata::Jury { jury }) => jury,
             _ => return Err(PyValueError::new_err("No jury data available")),
         };
-        Ok(Population { inner: jury.experts.clone() })
+        Ok(Population {
+            inner: jury.experts.clone(),
+        })
     }
 
     /// Get the per-expert per-sample vote matrix for the training data.
@@ -729,12 +825,14 @@ impl Experiment {
         } else {
             0
         };
-        format!("Experiment(folds={}, generations={}, time={:.2}s, features={}, samples={})",
+        format!(
+            "Experiment(folds={}, generations={}, time={:.2}s, features={}, samples={})",
             self.inner.collections.len(),
             gens,
             self.inner.execution_time,
             self.inner.train_data.feature_len,
-            self.inner.train_data.sample_len)
+            self.inner.train_data.sample_len
+        )
     }
 }
 
@@ -794,7 +892,8 @@ fn filter_features<'py>(py: Python<'py>, param: &Param) -> PyResult<Bound<'py, P
         &param.inner.data.X,
         &param.inner.data.y,
         param.inner.data.features_in_rows,
-    ).map_err(|e| PyValueError::new_err(format!("Failed to load data: {}", e)))?;
+    )
+    .map_err(|e| PyValueError::new_err(format!("Failed to load data: {}", e)))?;
 
     // Run feature evaluation (includes statistical testing + FDR correction)
     let (class_0_features, class_1_features) = data.evaluate_features(&param.inner);
@@ -825,16 +924,20 @@ fn filter_features<'py>(py: Python<'py>, param: &Param) -> PyResult<Bound<'py, P
 
         for i in 0..data.sample_len {
             let val = data.X.get(&(i, j)).copied().unwrap_or(0.0);
-            if data.y[i] == 0 {
+            if data.y[i] == 0.0 {
                 n_0 += 1;
                 sum_0 += val;
                 sum_sq_0 += val * val;
-                if val != 0.0 { count_nz_0 += 1; }
+                if val != 0.0 {
+                    count_nz_0 += 1;
+                }
             } else {
                 n_1 += 1;
                 sum_1 += val;
                 sum_sq_1 += val * val;
-                if val != 0.0 { count_nz_1 += 1; }
+                if val != 0.0 {
+                    count_nz_1 += 1;
+                }
             }
         }
 
@@ -842,23 +945,45 @@ fn filter_features<'py>(py: Python<'py>, param: &Param) -> PyResult<Bound<'py, P
         let mean_1 = if n_1 > 0 { sum_1 / n_1 as f64 } else { 0.0 };
         let std_0 = if n_0 > 1 {
             ((sum_sq_0 / n_0 as f64) - mean_0 * mean_0).max(0.0).sqrt()
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         let std_1 = if n_1 > 1 {
             ((sum_sq_1 / n_1 as f64) - mean_1 * mean_1).max(0.0).sqrt()
-        } else { 0.0 };
-        let prev_0 = if n_0 > 0 { count_nz_0 as f64 / n_0 as f64 * 100.0 } else { 0.0 };
-        let prev_1 = if n_1 > 0 { count_nz_1 as f64 / n_1 as f64 * 100.0 } else { 0.0 };
+        } else {
+            0.0
+        };
+        let prev_0 = if n_0 > 0 {
+            count_nz_0 as f64 / n_0 as f64 * 100.0
+        } else {
+            0.0
+        };
+        let prev_1 = if n_1 > 0 {
+            count_nz_1 as f64 / n_1 as f64 * 100.0
+        } else {
+            0.0
+        };
 
         // Overall stats
         let n_total = n_0 + n_1;
-        let mean_all = if n_total > 0 { (sum_0 + sum_1) / n_total as f64 } else { 0.0 };
+        let mean_all = if n_total > 0 {
+            (sum_0 + sum_1) / n_total as f64
+        } else {
+            0.0
+        };
         let sum_sq_all = sum_sq_0 + sum_sq_1;
         let std_all = if n_total > 1 {
-            ((sum_sq_all / n_total as f64) - mean_all * mean_all).max(0.0).sqrt()
-        } else { 0.0 };
+            ((sum_sq_all / n_total as f64) - mean_all * mean_all)
+                .max(0.0)
+                .sqrt()
+        } else {
+            0.0
+        };
         let prev_all = if n_total > 0 {
             (count_nz_0 + count_nz_1) as f64 / n_total as f64 * 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         feat_dict.set_item("mean", mean_all)?;
         feat_dict.set_item("std", std_all)?;
@@ -877,7 +1002,7 @@ fn filter_features<'py>(py: Python<'py>, param: &Param) -> PyResult<Bound<'py, P
             feat_dict.set_item("significance", sig)?;
         } else {
             feat_dict.set_item("selected", false)?;
-            feat_dict.set_item("class", 2u8)?;  // not significant
+            feat_dict.set_item("class", 2u8)?; // not significant
             feat_dict.set_item("significance", py.None())?;
         }
 
@@ -889,7 +1014,11 @@ fn filter_features<'py>(py: Python<'py>, param: &Param) -> PyResult<Bound<'py, P
     let mut c0: usize = 0;
     let mut c1: usize = 0;
     for &y_val in &data.y {
-        if y_val == 0 { c0 += 1; } else { c1 += 1; }
+        if y_val == 0.0 {
+            c0 += 1;
+        } else {
+            c1 += 1;
+        }
     }
     if data.classes.len() >= 2 {
         class_counts.set_item(&data.classes[0], c0)?;
