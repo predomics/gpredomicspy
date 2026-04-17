@@ -33,6 +33,7 @@ fn data_type_name(dt: u8) -> &'static str {
         0 => "raw",
         1 => "prevalence",
         2 => "log",
+        3 => "zscore",
         _ => "unknown",
     }
 }
