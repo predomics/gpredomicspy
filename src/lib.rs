@@ -23,6 +23,10 @@ fn language_name(lang: u8) -> &'static str {
         1 => "ternary",
         2 => "pow2",
         3 => "ratio",
+        4 => "binary-or",
+        5 => "ternary-or",
+        6 => "pow2-or",
+        7 => "ratio-or",
         101 => "mcmc_generic",
         _ => "unknown",
     }
@@ -103,6 +107,7 @@ impl Param {
             // Beam
             "best_models_criterion" => self.inner.beam.best_models_criterion = value,
             "max_nb_of_models" => self.inner.beam.max_nb_of_models = value as usize,
+            "max_clause_size" => self.inner.beam.max_clause_size = value as usize,
 
             // CV
             "outer_folds" => self.inner.cv.outer_folds = value as usize,
@@ -298,9 +303,19 @@ impl Individual {
     /// Get the model's feature indices and their coefficients.
     ///
     /// Returns:
-    ///     dict mapping feature index (int) to coefficient sign (int: -1, 0, or 1).
+    ///     dict mapping feature index (int) to coefficient (int: -1, 0, or 1; powers of two
+    ///     for pow2). For OR languages the coefficient is the one of the feature's clause.
     fn get_features(&self) -> BTreeMap<usize, i8> {
         self.inner.features.clone()
+    }
+
+    /// Get the disjunctive clauses of an OR-language model (binary-or, ternary-or, ratio-or).
+    ///
+    /// Returns:
+    ///     list of clauses, each a sorted list of feature indices sharing one coefficient
+    ///     (see get_features), or None for classic languages.
+    fn get_clauses(&self) -> Option<Vec<Vec<usize>>> {
+        self.inner.clauses.clone()
     }
 
     /// Compute signed Jaccard dissimilarity with another Individual.
